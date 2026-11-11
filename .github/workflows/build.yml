@@ -1,0 +1,65 @@
+name: Build APK
+
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Unpack app source
+        shell: python
+        run: |
+          import base64, os
+          data = open("bundle.txt", encoding="utf-8").read().replace("\r\n", "\n")
+          for part in data.split("=====FILE ")[1:]:
+              header, body = part.split("\n", 1)
+              name, enc = header.rstrip("=").rsplit(" ", 1)
+              body = body.split("=====END=====")[0]
+              if body.endswith("\n"):
+                  body = body[:-1]
+              os.makedirs(os.path.dirname(name) or ".", exist_ok=True)
+              if enc == "b64":
+                  open(name, "wb").write(base64.b64decode(body))
+              else:
+                  open(name, "w", encoding="utf-8").write(body)
+              print(enc, os.path.getsize(name), name)
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+
+      - name: Build APK
+        run: gradle assembleRelease --no-daemon 2>&1 | tee build.log
+
+      - name: Show compile errors
+        if: failure()
+        run: grep -E "^e: |error:|What went wrong" -A3 build.log | head -80 || true
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/app-release.apk FabricReelMaker.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: FabricReelMaker-apk
+          path: FabricReelMaker.apk
+
+      - name: Publish download link
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest -y --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+          gh release create latest FabricReelMaker.apk --repo "$GITHUB_REPOSITORY" \
+            --title "Fabric Reel Maker (latest build)" \
+            --notes "Download FabricReelMaker.apk on your Android phone and install it."
